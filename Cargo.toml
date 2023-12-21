@@ -1,0 +1,22 @@
+[package]
+name = "directory_scanner"
+version = "0.1.0"
+authors = ["Aviad Cohen <avi27200p@gmail.com>"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+lazy_static = "1.4"
+tempfile = "3.8.1"
+serde_json = "1.0"
+async-recursion = "1.0.5"
+
+[lib]
+name = "directory_scanner"
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
