@@ -67,7 +67,7 @@ char* json_hierarchy = get_directory_map("C:\\path\\to\\directory", 0);  // 0 fo
 FreeLibrary(hModule);
 ```
 
-## Example in TypeScript
+### Example in TypeScript
 
 To use `directory_scanner.dll` in a TypeScript application, you'll need Node.js and the `ffi-napi` package:
 
