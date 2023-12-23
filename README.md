@@ -113,4 +113,5 @@ Here's what you might expect as output from the get_directory_map function:
 ```
 
 ### Contributing
+
 Contributions are welcome! If you have a bug to report or a feature to suggest, please open an issue or a pull request.
