@@ -140,7 +140,7 @@ pub extern "C" fn scan_directory_async(path_ptr: *const c_char) {
 
 
 #[no_mangle]
-pub extern "C" fn get_directory_map(path_ptr: *const c_char) -> *mut c_char {
+pub extern "C" fn get_directory_map(path_ptr: *const c_char, depth: i32) -> *mut c_char {
     let c_str = unsafe { CStr::from_ptr(path_ptr) };
     let path_str = match c_str.to_str() {
         Ok(str) => str.replace("\\", "/"),  // Normalize the path string
@@ -156,24 +156,39 @@ pub extern "C" fn get_directory_map(path_ptr: *const c_char) -> *mut c_char {
 
             // Normalize paths for comparison and check if the root matches the provided path
             if directory_map.path.replace("\\", "/") == path_str {
-                let first_level_hierarchy = FolderHierarchy {
-                    value: directory_map.value, // You might need to calculate this value differently
-                    name: directory_map.name.clone(),
-                    path: directory_map.path.clone(),
-                    children: directory_map.children.iter()
-                        .map(|child| FolderHierarchy {
-                            value: child.value,
-                            name: child.name.clone(),
-                            path: child.path.clone(),
-                            children: vec![],  // Exclude further children
+                match depth {
+                    0 => {
+                        // Return only the first level children
+                        let first_level_hierarchy = FolderHierarchy {
+                            value: directory_map.value, // You might need to calculate this value differently
+                            name: directory_map.name.clone(),
+                            path: directory_map.path.clone(),
+                            children: directory_map.children.iter()
+                                .map(|child| FolderHierarchy {
+                                    value: child.value,
+                                    name: child.name.clone(),
+                                    path: child.path.clone(),
+                                    children: vec![],  // Exclude further children
+                                })
+                                .collect(),
+                        };
+                        serde_json::to_string(&first_level_hierarchy).unwrap_or_else(|e| {
+                            eprintln!("Failed to serialize directory map: {}", e);
+                            String::new()  // Return an empty string if serialization fails
                         })
-                        .collect(),
-                };
-
-                serde_json::to_string(&first_level_hierarchy).unwrap_or_else(|e| {
-                    eprintln!("Failed to serialize directory map: {}", e);
-                    String::new()  // Return an empty string if serialization fails
-                })
+                    },
+                    1 => {
+                        // Return the whole directory map
+                        serde_json::to_string(&directory_map).unwrap_or_else(|e| {
+                            eprintln!("Failed to serialize directory map: {}", e);
+                            String::new()  // Return an empty string if serialization fails
+                        })
+                    },
+                    _ => {
+                        eprintln!("Invalid depth argument passed to get_directory_map");
+                        serde_json::to_string(&Vec::<FolderHierarchy>::new()).unwrap() // return an empty array in JSON format
+                    }
+                }
             } else {
                 eprintln!("Root folder not found for path: {}", path_str);
                 serde_json::to_string(&Vec::<FolderHierarchy>::new()).unwrap() // return an empty array in JSON format
