@@ -33,9 +33,9 @@ To run the tests, use the following command:
 
 ```bash
 cargo test
+```
 
 ## Usage
-```
 
 To use this DLL in your application, follow these steps:
 
@@ -66,7 +66,7 @@ char* json_hierarchy = get_directory_map("C:\\path\\to\\directory");
 FreeLibrary(hModule);
 ```
 
-## Example in TypeScript
+### Example in TypeScript
 
 To use `directory_scanner.dll` in a TypeScript application, you'll need Node.js and the `ffi-napi` package:
 
