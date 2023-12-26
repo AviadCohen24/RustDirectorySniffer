@@ -1,7 +1,6 @@
 use serde::{Serialize, Deserialize};
 use std::{path::{PathBuf, Path}, ffi::{CString, CStr}, os::raw::c_char, sync::{Arc, Mutex}, io};
 use tokio::{fs, runtime::Runtime};
-use lazy_static::lazy_static;
 use async_recursion::async_recursion;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -12,13 +11,27 @@ struct FolderHierarchy {
     children: Vec<FolderHierarchy>,
 }
 
-lazy_static! {
-    static ref GLOBAL_DIRECTORY_MAP: Arc<Mutex<FolderHierarchy>> = Arc::new(Mutex::new(FolderHierarchy {
-        value: 0,
-        name: String::new(),
-        path: String::new(),
-        children: vec![],
-    }));
+struct DirectorySniffer {
+    directory_map: Arc<Mutex<FolderHierarchy>>,
+}
+
+impl DirectorySniffer {
+    fn open() -> Self {
+        let hierarchy = FolderHierarchy {
+            value: 0,
+            name: String::new(),
+            path: String::new(),
+            children: vec![],
+        };
+        DirectorySniffer {
+            directory_map: Arc::new(Mutex::new(hierarchy)),
+        }
+    }
+
+    fn close(self) {
+        // TODO: Implement necessary cleanup for the RustDirectorySniffer
+        // This might include resetting the FolderHierarchy or releasing other resources.
+    }
 }
 
 #[async_recursion]
@@ -73,7 +86,7 @@ async fn scan_folder(directory_path: PathBuf, shared_state: Arc<Mutex<FolderHier
 }
 
 #[no_mangle]
-pub extern "C" fn scan_directory_async(path_ptr: *const c_char) {
+pub extern "C" fn scan_directory_async(sniffer: &DirectorySniffer, path_ptr: *const c_char) {
     let c_str = unsafe { CStr::from_ptr(path_ptr) };
     let path_str = match c_str.to_str() {
         Ok(str) => str,
@@ -85,7 +98,7 @@ pub extern "C" fn scan_directory_async(path_ptr: *const c_char) {
     let directory_path = PathBuf::from(path_str);
 
     // Clone the GLOBAL_DIRECTORY_MAP for use within the async task
-    let global_map_clone = Arc::clone(&GLOBAL_DIRECTORY_MAP);
+    let global_map_clone = Arc::clone(&sniffer.directory_map);
 
     // Spawn a new thread to handle the asynchronous scanning
     std::thread::spawn(move || {
@@ -140,7 +153,7 @@ pub extern "C" fn scan_directory_async(path_ptr: *const c_char) {
 
 
 #[no_mangle]
-pub extern "C" fn get_directory_map(path_ptr: *const c_char, depth: i32) -> *mut c_char {
+pub extern "C" fn get_directory_map(sniffer: &DirectorySniffer, path_ptr: *const c_char, depth: i32) -> *mut c_char {
     let c_str = unsafe { CStr::from_ptr(path_ptr) };
     let path_str = match c_str.to_str() {
         Ok(str) => str.replace("\\", "/"),  // Normalize the path string
@@ -150,7 +163,7 @@ pub extern "C" fn get_directory_map(path_ptr: *const c_char, depth: i32) -> *mut
         }
     };
 
-    let json = match GLOBAL_DIRECTORY_MAP.lock() {
+    let json = match sniffer.directory_map.lock() {
         Ok(guard) => {
             let directory_map = &*guard;
 
@@ -234,14 +247,17 @@ mod tests {
         let mut file = File::create(&file_path).unwrap();
         writeln!(file, "Hello, world!").unwrap();
 
-        let folder_hierarchy = scan_folder(dir.path().to_path_buf(), Arc::clone(&GLOBAL_DIRECTORY_MAP)).await.unwrap();
-        println!("Folder Hierarchy: {:?}", folder_hierarchy);
+        let sniffer = DirectorySniffer::open();
+        {
+            let folder_hierarchy = scan_folder(dir.path().to_path_buf(), Arc::clone(&sniffer.directory_map)).await.unwrap();
+            println!("Folder Hierarchy: {:?}", folder_hierarchy);
 
-        let locked_state = GLOBAL_DIRECTORY_MAP.lock().unwrap();
-        println!("Locked state: {:?}", locked_state);
-        
-        //assert_eq!(folder_hierarchy.name, ".tmpoPzeSl", "The directory name should be '.tmpoPzeSl'.");
-        assert_eq!(folder_hierarchy.value, 14, "The directory size should be 14 bytes.");
+            let locked_state = sniffer.directory_map.lock().unwrap();
+            println!("Locked state: {:?}", *locked_state);
+            
+            assert_eq!(folder_hierarchy.value, 14, "The directory size should be 14 bytes.");
+        } 
+        sniffer.close();
     }
 
     async fn create_test_directory_structure(base_dir: &PathBuf) -> io::Result<()> {
@@ -266,43 +282,38 @@ mod tests {
         let dir = tempdir().unwrap();
         create_test_directory_structure(&dir.path().to_path_buf()).await.unwrap();
 
-        let folder_hierarchy = scan_folder(dir.path().to_path_buf(), Arc::clone(&GLOBAL_DIRECTORY_MAP)).await.unwrap();
+        let sniffer = DirectorySniffer::open();
+        let folder_hierarchy = scan_folder(dir.path().to_path_buf(), Arc::clone(&sniffer.directory_map)).await.unwrap();
 
         println!("Folder Hierarchy: {:?}", folder_hierarchy);
 
-        // Assertions based on the structure you created
         assert_eq!(folder_hierarchy.children.len(), 2, "There should be two subfolders.");
+        sniffer.close();
     }
+
 
     #[tokio::test]
     async fn test_get_directory_map() {
-        // Step 1: Set up the directory structure
         let dir = tempdir().unwrap();
         create_test_directory_structure(&dir.path().to_path_buf()).await.unwrap();
         
-        // Step 2: Scan the directory to populate the directory structure
+        let sniffer = DirectorySniffer::open();
         let path_str = dir.path().to_str().unwrap();
         let path_cstr = CString::new(path_str).unwrap();
-        scan_directory_async(path_cstr.as_ptr());
+
+        scan_directory_async(&sniffer, path_cstr.as_ptr());
 
         thread::sleep(Duration::from_millis(50));
 
-        // Step 5: Call the function under test
-        let raw_json_ptr = get_directory_map(path_cstr.as_ptr());
+        let raw_json_ptr = get_directory_map(&sniffer, path_cstr.as_ptr(), 0);
 
-        // Ensure the pointer is not null
         assert!(!raw_json_ptr.is_null(), "get_directory_map returned a null pointer");
 
-        // Step 6: Convert the C-style string returned by get_directory_map back to a Rust String
         let json_str = unsafe { CStr::from_ptr(raw_json_ptr) }.to_str().unwrap();
-
-        // Step 7: Deserialize the JSON string back to a FolderHierarchy object
         let directory_map: FolderHierarchy = serde_json::from_str(json_str).unwrap();
 
-        // Perform your assertions
-        assert!(!directory_map.children.is_empty(), "The directory map childrens should not be empty");
+        assert!(!directory_map.children.is_empty(), "The directory map children should not be empty");
         
-        // Check if the children of each folder in the directory map have an empty children array
         for folder in &directory_map.children {
             assert!(
                 folder.children.iter().all(|child| child.children.is_empty()),
@@ -310,15 +321,11 @@ mod tests {
             );
         }
 
-        // Step 8: Clean up the C string allocated by get_directory_map
         unsafe {
             CString::from_raw(raw_json_ptr);
         }
+        sniffer.close();
     }
-
-
-
-
 }
 
 fn main() {
