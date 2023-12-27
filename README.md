@@ -6,31 +6,58 @@ This repository contains a Rust-compiled Dynamic Link Library (DLL) named `direc
 
 - **Scan Directory**: Recursively scans directories and constructs a hierarchical structure of folders and files.
 - **Get Directory Map**: Retrieves the hierarchical structure of a specified directory. Users can choose to retrieve only the first level or the entire directory map.
+- **Asynchronous Scanning**: Leverages Rust's powerful async/await features for non-blocking directory scanning.
+- **FFI Support**: Includes functionality to be called from other languages via FFI (Foreign Function Interface), particularly useful for integrating with C or TypeScript projects.
+- **Thread Safety**: Utilizes `Arc<Mutex<>>` to safely share state between threads.
+- **Incremental Updates**: Supports the ability to stop the scanning process mid-way.
 
 ## Functions
 
+### `create_directory_scanner`
+
+Allocates and initializes a new `DirectoryScanner`.
+
+- **Returns**: A pointer to the newly allocated `DirectoryScanner`.
+
+### `free_directory_scanner`
+
+Frees a previously allocated `DirectoryScanner`.
+
+- **Parameters**:
+  - `scanner_ptr`: Pointer to the `DirectoryScanner` to free.
+
 ### `scan_directory_async`
-- **Description**: Scans the directory asynchronously and updates the global directory map with the folder hierarchy.
-- **Arguments**: 
-  - `path_ptr`: A pointer to the directory path (as a C-style string) to scan.
-- **Returns**: Nothing. Updates are made to the global state.
+
+Initiates an asynchronous scan of a directory.
+
+- **Parameters**:
+  - `scanner_ptr`: Pointer to an instance of `DirectoryScanner`.
+  - `path_ptr`: Path of the directory to scan.
 
 ### `get_directory_map`
-- **Description**: Retrieves the folder hierarchy for a specified directory path. Users can specify the depth of detail in the returned data.
-- **Arguments**: 
-  - `path_ptr`: A pointer to the directory path (as a C-style string) whose hierarchy is to be retrieved.
-  - `depth`: An integer where `0` indicates only the first level should be returned and `1` indicates the entire map should be returned.
-- **Returns**: A pointer to a C-style string containing the JSON representation of the folder hierarchy.
+
+Retrieves the scanned directory hierarchy as a JSON string.
+
+- **Parameters**:
+  - `scanner_ptr`: Pointer to an instance of `DirectoryScanner`.
+  - `path_ptr`: Path of the directory to retrieve.
+  - `depth`: The depth to which the directory map should be retrieved.
+
+### `stop_scanning`
+
+Requests the ongoing scanning process to stop.
+
+- **Parameters**:
+  - `scanner_ptr`: Pointer to an instance of `DirectoryScanner`.
+
 
 ## Testing
 
 The repository includes tests that cover the basic functionality of the DLL:
 
-- **`test_get_folder_size`**: Ensures the function correctly calculates the size of a folder.
-- **`test_scan_folder`**: Verifies that the scanning function accurately constructs the folder hierarchy.
-- **`test_get_directory_map`**: Checks if the directory map retrieval function provides the correct JSON structure based on the specified depth.
+- **`test_scan_and_get_directory_map`**: Verifies that the scanning function accurately constructs the folder hierarchy and checks if the directory map retrieval function provides the correct JSON structure based on the specified depth.
 
-To run the tests, use the following command:
+To run the test, use the following command:
 
 ```bash
 cargo test
@@ -49,22 +76,57 @@ To use this DLL in your application, follow these steps:
 Here's an example of how you might call these functions from a C++ application:
 
 ```cpp
-// Load the DLL
-HMODULE hModule = LoadLibrary(L"directory_scanner.dll");
+#include <iostream>
+#include <dlfcn.h> // For dynamic loading
 
-// Get function pointers
-auto scan_directory_async = (void(*)(const char*))GetProcAddress(hModule, "scan_directory_async");
-auto get_directory_map = (char*(*)(const char*, int))GetProcAddress(hModule, "get_directory_map");
+// Opaque pointer to DirectoryScanner as we can't directly manipulate it from C++.
+typedef void* DirectoryScannerPtr;
 
-// Use the functions
-scan_directory_async("C:\\path\\to\\directory");
-char* json_hierarchy = get_directory_map("C:\\path\\to\\directory", 0);  // 0 for first level, 1 for full map
+// Function pointer types
+typedef DirectoryScannerPtr (*CreateDirectoryScannerFn)();
+typedef void (*FreeDirectoryScannerFn)(DirectoryScannerPtr scanner_ptr);
+typedef void (*ScanDirectoryAsyncFn)(DirectoryScannerPtr scanner_ptr, const char* path_ptr);
+typedef char* (*GetDirectoryMapFn)(DirectoryScannerPtr scanner_ptr, const char* path_ptr, int depth);
+typedef void (*StopScanningFn)(DirectoryScannerPtr scanner_ptr);
 
-// Process the JSON hierarchy
-// ...
+int main() {
+    // Load the DLL
+    HMODULE hGetProcIDDLL = LoadLibrary("path_to_your_dll.dll");
 
-// Free the DLL
-FreeLibrary(hModule);
+    // Resolve function addresses
+    CreateDirectoryScannerFn createDirectoryScanner = (CreateDirectoryScannerFn)GetProcAddress(hGetProcIDDLL, "create_directory_scanner");
+    FreeDirectoryScannerFn freeDirectoryScanner = (FreeDirectoryScannerFn)GetProcAddress(hGetProcIDDLL, "free_directory_scanner");
+    ScanDirectoryAsyncFn scanDirectoryAsync = (ScanDirectoryAsyncFn)GetProcAddress(hGetProcIDDLL, "scan_directory_async");
+    GetDirectoryMapFn getDirectoryMap = (GetDirectoryMapFn)GetProcAddress(hGetProcIDDLL, "get_directory_map");
+    StopScanningFn stopScanning = (StopScanningFn)GetProcAddress(hGetProcIDDLL, "stop_scanning");
+
+    // Initialize the scanner
+    void* scanner = createDirectoryScanner();
+
+    // Path to the directory you want to scan
+    const char* path = "C:\\path\\to\\scan";
+
+    // Start scanning
+    scanDirectoryAsync(scanner, path);
+
+    // ... perform operations ...
+
+    // Stop scanning
+    stopScanning(scanner);
+
+    // Retrieve the directory map
+    char* directoryMapJson = getDirectoryMap(scanner, path, 0);
+    std::cout << "Directory Map: " << directoryMapJson << std::endl;
+
+    // Free the directory scanner
+    freeDirectoryScanner(scanner);
+
+    // Clean up
+    FreeLibrary(hGetProcIDDLL);
+
+    return 0;
+}
+
 ```
 
 ### Example in TypeScript
@@ -72,19 +134,37 @@ FreeLibrary(hModule);
 To use `directory_scanner.dll` in a TypeScript application, you'll need Node.js and the `ffi-napi` package:
 
 ```typescript
-import { Library, Function } from 'ffi-napi';
+import { Library, ref } from 'ffi-napi';
 
-// Define the types for your functions
-const directoryScanner = new Library('directory_scanner.dll', {
-  'scan_directory_async': ['void', ['string']],
-  'get_directory_map': ['string', ['string', 'int']]
+const lib = Library('path_to_your_dll', {
+  'create_directory_scanner': ['pointer', []],
+  'free_directory_scanner': ['void', ['pointer']],
+  'scan_directory_async': ['void', ['pointer', 'string']],
+  'get_directory_map': ['string', ['pointer', 'string', 'int']],
+  'stop_scanning': ['void', ['pointer']],
 });
 
-// Call the functions
-directoryScanner.scan_directory_async("C:\\path\\to\\directory");
-const jsonHierarchy: string = directoryScanner.get_directory_map("C:\\path\\to\\directory", 0);  // 0 for first level, 1 for full map
+// Initialize the scanner
+const scanner = lib.create_directory_scanner();
 
-console.log("Directory Hierarchy:", jsonHierarchy);
+const path = 'C:\\path\\to\\scan';
+
+// Start scanning
+lib.scan_directory_async(scanner, path);
+
+// ... perform operations ...
+
+// Stop scanning
+lib.stop_scanning(scanner);
+
+// Retrieve the directory map
+const depth = 0;  // Specify the depth you want
+const directoryMapJson: string = lib.get_directory_map(scanner, path, depth);
+console.log("Directory Map: ", directoryMapJson);
+
+// Free the directory scanner
+lib.free_directory_scanner(scanner);
+
 ```
 
 ### Example Outputs
@@ -117,3 +197,11 @@ When depth is set to 1 (entire map), the output will include the entire folder h
 ### Contributing
 
 Contributions are welcome! If you have a bug to report or a feature to suggest, please open an issue or a pull request.
+
+
+**Important Notes:**
+- **C++**: The C++ example assumes you have the appropriate function declarations from the DLL. Ensure the function names match exactly what you've exported from Rust.
+- **TypeScript**: The TypeScript example uses `ffi-napi` for FFI. Ensure you have installed the package and its types, and that the function names and signatures match your Rust exports.
+- **Error Handling and Safety**: Both examples omit error handling for brevity. In a real application, ensure you handle potential errors, such as failed DLL loading, failed function resolution, invalid pointers, etc. Also, ensure that memory management, especially for the Rust-allocated strings, is handled correctly to prevent leaks.
+- **Testing**: Before deploying in a production environment, thoroughly test the interaction between your Rust code and the host application in a controlled setting.
+
