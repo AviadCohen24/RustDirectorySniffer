@@ -153,7 +153,7 @@ pub extern "C" fn scan_directory_async(scanner_ptr: *const Arc<DirectoryScanner>
     let scanner_clone = Arc::clone(scanner);
 
     // Spawn a new thread to handle asynchronous scanning.
-    std::thread::spawn(move || {
+    tokio::spawn(async move {
         let runtime = Runtime::new().unwrap();
         runtime.block_on(async {
             let root_hierarchy = FolderHierarchy {
@@ -297,26 +297,51 @@ mod tests {
                 writeln!(file, "This is a test file.").unwrap();
             }
         }
+        println!("Create directory successed");
 
         let scanner = Arc::new(DirectoryScanner::new());
         let (tx, mut rx) = mpsc::channel(1);
 
-        // Spawn the scanning in a separate task
+        let (testPath_ptr, testPath_cstring) = convert_pathbuf_to_c_char_pointer(temp_path)
+        .expect("Failed to convert path");
+
+        println!("Start scanning in separate task");
+        // Clone the scanner for use in the separate task
         let scanner_clone = scanner.clone();
+        // Spawn the scanning in a separate task
         tokio::spawn(async move {
-            let _ = scan_folder(temp_path.clone(), scanner_clone).await;
+            scan_directory_async(&scanner_clone, testPath_cstring.as_ptr());
             tx.send(()).await.unwrap();
         });
-
+        
+        println!("Trying to retrieve the directory map while scanning");
         // While scanning, try to retrieve the directory map
-        let directory_map = scanner.directory_map.lock().unwrap();
-        assert!(directory_map.children.is_empty(), "Directory map should be empty during scanning.");
+        {
+            let directory_map = scanner.directory_map.lock().unwrap();
+            assert!(!directory_map.children.is_empty(), "Directory map should not be empty during scanning.");
+        }        
 
         // Wait for the scanning to complete
         rx.recv().await;
 
+        println!("Scanning completed");
         // Check the directory map after scanning is complete
         let directory_map = scanner.directory_map.lock().unwrap();
+        println!("\nThe directory map afetr scanning is:\n{:?}\n", directory_map);
         assert!(!directory_map.children.is_empty(), "Directory map should not be empty after scanning.");
+    }
+
+    fn convert_pathbuf_to_c_char_pointer(path: PathBuf) -> Result<(*const c_char, CString), std::ffi::NulError> {
+        // Convert PathBuf to String
+        let path_str = path.into_os_string().into_string().expect("Path contains invalid Unicode");
+    
+        // Create a CString
+        let c_str = CString::new(path_str)?;
+    
+        // Obtain a pointer to the C string
+        let ptr = c_str.as_ptr();
+    
+        // Return both the pointer and the CString to manage its lifetime
+        Ok((ptr, c_str))
     }
 }
